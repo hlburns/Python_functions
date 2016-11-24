@@ -1,18 +1,3 @@
-""" Python module for working with my MITgcm  output
-    Channel model: Burns et al. 2016
-    Assumes following file structure:
-    outputdir/
-              grid.nc (grid)
-              Tav.nc  (Timeav U, V,W,T)
-              PSI.nc (layers package output)
-              Tav_VT.nc  (Timeav UT, VT, WT)
-    where *.nc are flies glued together with gluemncbig
-    Usage:
-    append path to incl this script and:
-    c = utils.ChannelSetup(output_dir=str(fname))
-    c.var or c.func()
-"""
-
 import os.path
 import numpy.ma as ma
 import numpy as np
@@ -248,13 +233,6 @@ class ChannelSetup:
         b = (self.g * self.tAlpha *
              self.get_zonal_avg('Tav.nc', 'THETA', mask=self.HFacC[:]))
         return self.ddz_cgrid_centered(b)
-
-    def get_Sp(self):
-        """ Docstring """
-        b = self.get_zonal_avg('Tav.nc', 'THETA', mask=None)
-        
-        return ma.divide(-self.ddy_cgrid_centered(b), self.ddz_cgrid_centered(b))
-
 
     def get_psi_iso(self):
         """Read output from layers package to constructe isopycnal

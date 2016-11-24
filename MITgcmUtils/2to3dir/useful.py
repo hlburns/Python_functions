@@ -1,7 +1,6 @@
 #! /usr/env ipython
 from numba import autojit
 import numpy as np
-import numpy.ma as ma
 from scipy.interpolate import interp1d
 from scipy import interpolate
 
@@ -197,19 +196,3 @@ numba_Var_mlav = autojit()(Var_mlav)
 numba_Var_mlav.func_name = "numba_Var_mlav"
 numba_Var_mlint = autojit()(Var_mlint)
 numba_Var_mlint.func_name = "numba_Var_mlint"
-
-def fill_holes(Var):
-    sh = Var.shape
-    Var_new = Var
-    # Cant fill in masked values need to remove mask
-    for kk in range(sh[0]):
-        indx = np.where(Var[kk,:].mask==False)[0]
-        if len(indx)==0:
-            continue
-        start = np.where(Var[kk,:].mask==False)[0][0]
-        space=np.diff(indx) 
-        for jj in range(len(indx)-1):
-            if jj < start or space[jj] == 1 :
-               continue
-            Var_new[kk,indx[jj]] = ma.mean(Var[kk,indx[jj]:indx[jj+1]])
-    return Var_new

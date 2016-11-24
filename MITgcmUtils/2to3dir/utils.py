@@ -249,13 +249,6 @@ class ChannelSetup:
              self.get_zonal_avg('Tav.nc', 'THETA', mask=self.HFacC[:]))
         return self.ddz_cgrid_centered(b)
 
-    def get_Sp(self):
-        """ Docstring """
-        b = self.get_zonal_avg('Tav.nc', 'THETA', mask=None)
-        
-        return ma.divide(-self.ddy_cgrid_centered(b), self.ddz_cgrid_centered(b))
-
-
     def get_psi_iso(self):
         """Read output from layers package to constructe isopycnal
         streamfunction."""
