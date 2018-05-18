@@ -17,6 +17,7 @@ import os.path
 import numpy.ma as ma
 import numpy as np
 import netCDF4
+import matplotlib.pyplot as plt
 #from scipy.interpolate import interp1d
 
 class ChannelSetup:
@@ -79,7 +80,9 @@ class ChannelSetup:
                                       self.layers_bounds[:-1])
         # top points (where w is computed)
         self.layers_top = self.layers_bounds[:-1]
-
+        # Cell Volume array 
+        self.CellVol = self.rac*np.tile(self.dzf,(self.Nx,self.Ny,1)).T
+        
     def mnc(self, fname, varname, mask=None):
         """import var with  masking capability"""
         file2read = netCDF4.Dataset(self.output_dir+fname, 'r')
@@ -157,6 +160,20 @@ class ChannelSetup:
             q_south[mask] = q_north[mask]
             q_north[mask[:, np.r_[1:Ny, Ny-1]]] = q_south[mask[:, np.r_[1:Ny, Ny-1]]]
         return 0.5 * (q_north + q_south)
+    
+    def vgrid_to_cgridall(self, q, neumann_bc=False):
+        """Interpolate v-grid variable (cell southern bdry) hortizontally
+        to the c-grid (cell center)"""
+        # make sure to mask land properly
+        # values inside land are zero, so don't try to interpolate through them
+        # apply masks --> implement for Full topo runs
+        q_south = q.copy()[:, :, 0:-1, :] # the current point
+        q_north = q.copy()[:, :, np.r_[1:Ny, Ny-1], :] # the point north
+        if neumann_bc:
+            mask = (self.HFacS == 0.)
+            q_south[mask] = q_north[mask]
+            q_north[mask[:, np.r_[1:Ny, Ny-1]]] = q_south[mask[:, np.r_[1:Ny, Ny-1]]]
+        return 0.5 * (q_north + q_south)
 
     def ugrid_to_cgrid(self, q, neumann_bc=False):
         """Interpolate v-grid variable (cell southern bdry) hortizontally
@@ -172,7 +189,21 @@ class ChannelSetup:
             q_west[mask[:, :, np.r_[1:Nx, Nx-1]]] = q_east[mask[:, :, np.r_[1:Nx, Nx-1]]]
 
         return 0.5 * (q_east + q_west)
+        
+    def ugrid_to_cgridall(self, q, neumann_bc=False):
+        """Interpolate v-grid variable (cell southern bdry) hortizontally
+        to the c-grid (cell center)"""
+        # make sure to mask land properly
+        # values inside land are zero, so don't try to interpolate through them
+        q_east = q.copy()[:, :, :, 0:-1] # the current point
+        q_west = q.copy()[:, :, :, 1::] # the point north
+        # apply masks --> implement for Full topo runs
+        if neumann_bc:
+            mask = (self.HFacS == 0.)
+            q_east[mask] = q_east[mask]
+            q_west[mask[:, :, np.r_[1:Nx, Nx-1]]] = q_east[mask[:, :, np.r_[1:Nx, Nx-1]]]
 
+        return 0.5 * (q_east + q_west)
 
     def ddz_cgrid_centered(self, q):
         """Vertical second-order centered difference on the c grid"""
@@ -281,13 +312,14 @@ class ChannelSetup:
             psi_iso_z[:, j] = np.interp(self.zc, layer_depth[:], psi_iso[:, j])
         return psi_iso_z
 
+
     # use c instead of self, shorter to write
     def get_qgpv_grad(self, mask=None):
         """Calculate QGPV gradient from standard output fields"""
         if mask is not None:
-            T = self.get_zonal_avg('Tav.nc', 'THETA', mask)
+            T = self.mnc('Tav.nc', 'THETA', mask)
         else:
-            T = self.get_zonal_avg('Tav.nc', 'THETA')
+            T = self.mnc('Tav.nc', 'THETA')
         # isopycnal slope
         s = ma.divide(- self.ddy_cgrid_centered(T), self.ddz_cgrid_centered(T))
         return self.beta - self.f0 * self.ddz_cgrid_centered(s)
@@ -330,7 +362,7 @@ class ChannelSetup:
         """Depth Average a variable in C-grid with varying depth"""
         Depth_av = (ma.mean(ma.divide(Var *
                                       np.tile(self.dzf, (self.Nx, self.Ny, 1)).T,
-                                      self.Depth, axis=0)))
+                                      self.Depth), axis=0))
         return Depth_av
 
     def depth_integrate(self, Var):
@@ -386,6 +418,13 @@ class ChannelSetup:
         wflux = -(div_uflux[:-1] + div_vflux[:-1])
         return wflux
 
+    def calc_KEt(self): 
+        """Calculates domain KE NO MASK"""
+        return 0.5 * ((self.ugrid_to_cgridall(self.mnc_tl('VSQ1.nc','UVELSQ'))
+                       + self.vgrid_to_cgridall(self.mnc_tl('VSQ1.nc','VVELSQ')
+                       )*self.CellVol*self.HFacC).sum(axis=3).sum(axis=2).sum(axis=1))
+
+
     def calc_EKE(self):
         """Calculates EKE from reynolds decomp"""
         return 0.5 * ((self.mnc('VSQ.nc','UVELSQ',mask=self.HFacW[:]) 
@@ -395,6 +434,7 @@ class ChannelSetup:
                                                       mask=self.HFacS[:]) -
                                              self.mnc('Tav.nc','VVEL',
                                                       mask=self.HFacS[:])**2).mean(axis=2)))
+
                                                       
     def calc_EKE_all(self):
         """Calculates EKE from reynolds decomp"""
@@ -419,6 +459,51 @@ class ChannelSetup:
         return 0.5 * (self.ugrid_to_cgrid(self.mnc('Tav.nc','UVEL',mask=self.HFacW[:])**2)
                       + self.vgrid_to_cgrid((self.mnc('Tav.nc','VVEL',
                                                        mask=self.HFacS[:])**2)))      
+
+    def avg_cross_stream(self, q):
+        """ q = masked array
+        """
+        X,Y = np.meshgrid(self.xc,self.yc)
+        T0 = np.squeeze(self.depth_average(self.mnc('Tav.nc','THETA')))
+        Tbnds = np.squeeze(T0).mean(axis=1)[([self.Ny*2/3, self.Ny/2])]
+        T00 = Tbnds.mean() 
+        mask = (T0<Tbnds[0])|(T0>Tbnds[1])
+        
+        c = plt.contour(self.xc, self.yc,T0, [T00], colors='k')
+        p = c.collections[0].get_paths()[0].vertices
+        Np = p.shape[0]
+        dx,dy = np.diff(p[:,0]),np.diff(p[:,1])
+        s = np.hstack([0,np.cumsum((dx**2 + dy**2)**0.5)])
+        s = ma.masked_array(s, mask)
+        S = np.empty((self.Ny,self.Nx)).flatten()
+        for i in mask[~mask]:
+            k = anp.rgmin( (X.ravel()[i]-p[:,0])**2 + (Y.ravel()[i]-p[:,1])**2 )
+            S[i] = s[k]
+        S.shape = X.shape
+        S = ma.masked_array(S, mask)
+        Ns = 800
+        S0 = np.linspace(0,s[-1],Ns)
+        Ns = len(S0)
+        qsum = np.zeros(Ns)
+        area = np.zeros(Ns)
+        for n in np.arange(Ns):
+            fullmask = s.maks | (s>S0[n])
+            area[n] = (1-fullmask).sum()
+            qsum[n] = np.sum(ma.masked_array(q,fullmask))
+       
+        Dqsum = np.diff(qsum)
+        Darea = np.diff(area)
+        qS = Dqsum/Darea
+        # interpolate nans
+        mask = np.isnan(qS)
+        qS[mask] = np.interp(np.flatnonzero(mask), np.flatnonzero(~mask), qS[~mask])
+        return ma.masked_array(np.hstack([qS, 0]), S0>s.max())
+        
+        
+                   
+        
+        
+
 # Gridding:
 def cgrid_to_vgrid(q, neumann_bc=True):
     """Interpolate c-grid variable (cell center) hortizontally
@@ -509,3 +594,4 @@ def nan_helper(y):
     """
 
     return np.isnan(y), lambda z: z.nonzero()[0]
+
